@@ -60,7 +60,7 @@ function CheckPIN {
     )
     if (($NewPIN.length -gt 20) -or ($NewPIN.length -lt 7)) {
         if (-NOT $SilentMode) {
-            Write-Host "PIN has to be numeric and has to consist of between 8 and 20 digits."
+            Write-Host "PIN has to be numeric and has to consist of between 8 to 20 digits."
         }
         exit
     }
