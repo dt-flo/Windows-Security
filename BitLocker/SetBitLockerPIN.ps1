@@ -10,8 +10,23 @@ param(
     # Overwrite current PIN
     [Parameter(Position = 3)]
     [switch]
-    $OverwritePIN = $false
+    $OverwritePIN = $false,
+    # Help parameter
+    [Parameter()]
+    [switch]
+    $help = $false
 )
+
+if ($help) {
+    Write-Output "This script allows deploying a PIN for BitLocker encrypted drives."
+    Write-Output "Usage: .\SetBitLockerPIN [-PIN <NEWPIN>] [-Silentmode] [-Overwritepin]"
+    Write-Output "-PIN: Sets new PIN"
+    Write-Output "-Silentmode: Does not produce any outputs, suppresses errors"
+    Write-Output "-OverwritePIN: Sets new PIN even if there is already a PIN present"
+    Write-Output "Warning: If setting a new PIN fails, a TPM protector will be deployed. If no PIN is specified, the PIN is removed."
+    exit
+}
+
 $NewPIN = $PIN
 $RunAsAdmin = [bool](([System.Security.Principal.WindowsIdentity]::GetCurrent()).groups -match "S-1-5-32-544")
 
@@ -22,9 +37,7 @@ if (-Not $RunAsAdmin) {
     exit;
 }
 
-$MountPoint = $env:SystemDrive
-
-$BitlockerStateC = Get-BitLockerVolume | Select-Object -Property "MountPoint", "ProtectionStatus", "KeyProtector" | Where-Object -Property MountPoint -EQ $MountPoint
+$BitlockerStateC = Get-BitLockerVolume | Select-Object -Property "MountPoint", "ProtectionStatus", "KeyProtector" | Where-Object -Property MountPoint -EQ $env:SystemDrive
 
 if ($BitlockerStateC.ProtectionStatus -ne "On") {
     if (-NOT $SilentMode) {
@@ -66,14 +79,20 @@ function CheckPIN {
     }
 }
 
+$removePIN = $false
 
 if ($(([string]::IsNullOrEmpty($NewPIN)))) {
     if (-NOT $SilentMode) {
         $NewPIN = Read-Host -Prompt "Enter new PIN (numeric and between 8 and 20 characters)" -AsSecureString
-        CheckPIN($NewPIN)
+        if ($NewPIN.Length -gt 0) {
+            CheckPIN($NewPIN)
+        }
+        else {
+            $removePIN = $true
+        }
     }
     else {
-        exit;
+        $removePIN = $true
     }
 }
 else {
@@ -86,12 +105,27 @@ if ($NewPIN.GetType().Name -eq "String") {
 }
 
 if ($KeyProtectorType -eq "Tpm") {
-    Add-BitLockerKeyProtector $env:SystemDrive -TpmAndPinProtector -Pin $NewPIN
+    if ($removePIN -eq $false) {
+        Add-BitLockerKeyProtector $env:SystemDrive -TpmAndPinProtector -Pin $NewPIN | Out-Null
+    }
+    else {
+        exit
+    }
 }
 elseif ($KeyprotectorType -eq "TpmPin") {
     if ($OverwritePIN -eq $true) {
-        Remove-BitLockerKeyProtector -MountPoint $env:SystemDrive -KeyProtectorId $TPMKeyProtector.KeyProtectorId
-        Add-BitLockerKeyProtector $env:SystemDrive -TpmAndPinProtector -Pin $NewPIN
+        if ($removePIN -eq $false) {
+            Remove-BitLockerKeyProtector -MountPoint $env:SystemDrive -KeyProtectorId $TPMKeyProtector.KeyProtectorId | Out-Null
+            $Error.clear()
+            Add-BitLockerKeyProtector $env:SystemDrive -TpmAndPinProtector -Pin $NewPIN | Out-Null
+            if ($Error[0] -match "0x803100CC") {
+                Add-BitLockerKeyProtector $env:SystemDrive -TpmProtector | Out-Null
+            }
+        }
+        else {
+            Remove-BitLockerKeyProtector -MountPoint $env:SystemDrive -KeyProtectorId $TPMKeyProtector.KeyProtectorId | Out-Null
+            Add-BitLockerKeyProtector $env:SystemDrive -TpmProtector | Out-Null
+        }
     }
     else {
         if ($SilentMode -ne $true) {
